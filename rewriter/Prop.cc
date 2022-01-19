@@ -239,17 +239,6 @@ optional<PropInfo> parseProp(core::MutableContext ctx, const ast::Send *send) {
 
     ENFORCE(ASTUtil::dupType(ret.type) != nullptr, "No obvious type AST for this prop");
 
-    if (isTNilableTUntyped(ret.type)) {
-        auto loc = ret.type.loc();
-        if (auto e = ctx.beginError(loc, core::errors::Rewriter::NilableUntyped)) {
-            e.setHeader("`{}` is the same as `{}`", "T.nilable(T.untyped)", "T.untyped");
-            e.addErrorNote("You can replace this with `{}` and a `{}` argument", "T.untyped", "default: nil");
-        }
-
-        // rewrite the type to T.untyped to avoid re-raising the same error later on.
-        ret.type = ast::MK::Untyped(loc);
-    }
-
     // ----- Does the prop have any extra options? -----
 
     // Deep copy the rules hash so that we can destruct it at will to parse things,
@@ -260,6 +249,28 @@ optional<PropInfo> parseProp(core::MutableContext ctx, const ast::Send *send) {
         return std::nullopt;
     }
 
+    if (isTNilableTUntyped(ret.type)) {
+        auto loc = ret.type.loc();
+        if (auto e = ctx.beginError(loc, core::errors::Rewriter::NilableUntyped)) {
+            e.setHeader("`{}` is the same as `{}`", "T.nilable(T.untyped)", "T.untyped");
+            e.replaceWith("Use `T.untyped`", core::Loc{ctx.file, loc}, "T.untyped");
+
+            bool addDefault = true;
+            if (rulesTree != nullptr) {
+                auto *rules = ast::cast_tree<ast::Hash>(rulesTree);
+                addDefault = !ASTUtil::hasTruthyHashValue(ctx, *rules, core::Names::factory()) &&
+                             !ASTUtil::hasHashValue(ctx, *rules, core::Names::default_());
+            }
+
+            if (addDefault) {
+                auto end = core::Loc{ctx.file, core::LocOffsets{send->loc.endPos(), send->loc.endPos()}};
+                e.replaceWith("Add `default: nil`", end, ", default: nil");
+            }
+        }
+
+        // rewrite the type to T.untyped to avoid re-raising the same error later on.
+        ret.type = ast::MK::Untyped(loc);
+    }
     // ----- Parse any extra options -----
     if (rulesTree) {
         auto *rules = ast::cast_tree<ast::Hash>(rulesTree);
